@@ -12,10 +12,13 @@ import { join } from 'path';
 import { Table } from 'aws-cdk-lib/aws-dynamodb';
 import * as logs from 'aws-cdk-lib/aws-logs';
 import { Construct } from 'constructs';
+import { Bucket } from 'aws-cdk-lib/aws-s3';
 
 interface myProps extends cdk.StackProps {
   ddbTableName: string;
   ddbTableArn: string;
+  s3BucketName: string;
+  s3BucketArn: string;
 }
 
 export class SfnLambdaDdbScanPaginationStack extends cdk.Stack {
@@ -26,25 +29,41 @@ export class SfnLambdaDdbScanPaginationStack extends cdk.Stack {
       runtime: Runtime.NODEJS_18_X,
     };
 
-    const scanLambda = new NodejsFunction(this, 'ScanLambda', {
-      entry: join(__dirname, 'ts-lambdas', 'scan.ts'),
-      environment: {
-        DDB_TABLE_NAME: props.ddbTableName,
-      },
-      ...nodeJsFunctionProps,
-    });
+    const scanAndUploadLambda = new NodejsFunction(
+      this,
+      'ScanAndUploadLambda',
+      {
+        entry: join(__dirname, 'ts-lambdas', 'scan-and-upload-csv-to-s3.ts'),
+        environment: {
+          DDB_TABLE_NAME: props.ddbTableName,
+          BUCKET_NAME: props.s3BucketName,
+        },
+        ...nodeJsFunctionProps,
+      }
+    );
 
     const ddbTable = Table.fromTableArn(
       this,
       props.ddbTableName,
       props.ddbTableArn
     );
-    ddbTable.grantReadWriteData(scanLambda);
+    ddbTable.grantReadWriteData(scanAndUploadLambda);
 
-    const scanJob = new tasks.LambdaInvoke(this, 'DDB ScanJob', {
-      lambdaFunction: scanLambda,
-      outputPath: '$.Payload',
-    });
+    const bucket = Bucket.fromBucketArn(
+      this,
+      props.s3BucketName,
+      props.s3BucketArn
+    );
+    bucket.grantReadWrite(scanAndUploadLambda);
+
+    const scanAndUploadJob = new tasks.LambdaInvoke(
+      this,
+      'DDB ScanAndUploadJob',
+      {
+        lambdaFunction: scanAndUploadLambda,
+        outputPath: '$.Payload',
+      }
+    );
 
     const jobFailed = new sfn.Fail(this, 'Job Failed', {
       cause: 'DDB Scan Job Failed',
@@ -53,28 +72,35 @@ export class SfnLambdaDdbScanPaginationStack extends cdk.Stack {
 
     const success = new sfn.Succeed(this, 'Done!');
 
-    const definition = scanJob.next(
+    const definition = scanAndUploadJob.next(
       new sfn.Choice(this, 'DDB ScanJob Complete?')
-        .when(sfn.Condition.isNotNull('$.LastEvaluatedKey'), scanJob)
+        .when(sfn.Condition.isNotNull('$.LastEvaluatedKey'), scanAndUploadJob)
         .when(sfn.Condition.isNull('$.LastEvaluatedKey'), success)
         .otherwise(jobFailed)
     );
 
-    const logGroup = new logs.LogGroup(this, 'DdbScanStateMachineLogGroup');
+    const logGroup = new logs.LogGroup(
+      this,
+      'DdbScanAndUploadCsvToS3StateMachineLogGroup'
+    );
 
     // Create state machine
-    const stateMachine = new sfn.StateMachine(this, 'DdbScanStateMachine', {
-      definition,
-      logs: {
-        destination: logGroup,
-        level: sfn.LogLevel.ALL,
-      },
-      // 5分でタイムアウト
-      timeout: cdk.Duration.minutes(5),
-    });
+    const stateMachine = new sfn.StateMachine(
+      this,
+      'DdbScanAndUploadCsvToS3StateMachine',
+      {
+        definition,
+        logs: {
+          destination: logGroup,
+          level: sfn.LogLevel.ALL,
+        },
+        // 5分でタイムアウト
+        timeout: cdk.Duration.minutes(5),
+      }
+    );
 
     // Grant lambda execution roles
-    scanLambda.grantInvoke(stateMachine.role);
+    scanAndUploadLambda.grantInvoke(stateMachine.role);
 
     /**
      *  Run every day at 6PM UTC

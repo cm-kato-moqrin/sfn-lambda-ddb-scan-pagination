@@ -40,7 +40,9 @@
     "@aws-cdk/aws-s3:serverAccessLogsUseBucketPolicy": true,
     "@aws-cdk/aws-route53-patters:useCertificate": true,
     "@aws-cdk/customresources:installLatestAwsSdkDefault": false,
-    "DDB_TABLE_NAME": "YOUR_DDB_TABLE_NAME",
-    "DDB_TABLE_ARN": "YOUR_DDB_TABLE_ARN"
+    "DDB_TABLE_NAME": "YOUR_TABLE_NAME",
+    "DDB_TABLE_ARN": "YOUR_TABLE_ARN",
+    "BUCKET_NAME": "YOUR_BUCKET_NAME",
+    "BUCKET_ARN": "YOUR_BUCKET_ARN"
   }
 }
